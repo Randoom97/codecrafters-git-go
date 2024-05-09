@@ -28,6 +28,8 @@ func main() {
 		printCommandOutput(commands.CatFile())
 	case "hash-object":
 		printCommandOutput(commands.HashObject())
+	case "ls-tree":
+		printCommandOutput(commands.LsTree())
 	default:
 		utils.Error(fmt.Errorf("unknown command %s", command))
 	}
