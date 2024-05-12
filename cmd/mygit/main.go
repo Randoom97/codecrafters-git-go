@@ -30,6 +30,8 @@ func main() {
 		printCommandOutput(commands.HashObject())
 	case "ls-tree":
 		printCommandOutput(commands.LsTree())
+	case "write-tree":
+		printCommandOutput(commands.WriteTree())
 	default:
 		utils.Error(fmt.Errorf("unknown command %s", command))
 	}

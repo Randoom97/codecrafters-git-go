@@ -50,7 +50,11 @@ func CatFile() (response string, err error) {
 			treeNodes := readTree(length, reader)
 			var result strings.Builder
 			for _, node := range treeNodes {
-				result.WriteString(fmt.Sprintf("%d %s %s\n", node.mode, node.name, node.hash))
+				objectType := "blob"
+				if node.mode == 40000 {
+					objectType = "tree"
+				}
+				result.WriteString(fmt.Sprintf("%06d %s %s    %s\n", node.mode, objectType, node.hash, node.name))
 			}
 			return result.String(), nil
 		default:
@@ -93,7 +97,11 @@ func LsTree() (response string, err error) {
 		if nameOnly {
 			result.WriteString(fmt.Sprintf("%s\n", node.name))
 		} else {
-			result.WriteString(fmt.Sprintf("%d %s %s\n", node.mode, node.name, node.hash))
+			objectType := "blob"
+			if node.mode == 40000 {
+				objectType = "tree"
+			}
+			result.WriteString(fmt.Sprintf("%06d %s %s    %s\n", node.mode, objectType, node.hash, node.name))
 		}
 	}
 	return result.String(), nil
@@ -129,32 +137,100 @@ func HashObject() (response string, err error) {
 		leadingBytes := []byte(fmt.Sprintf("blob %d%c", len(fileBytes), 0))
 		blobBytes := append(leadingBytes, fileBytes...)
 
-		hasher := sha1.New()
-		hasher.Write(blobBytes)
-		hash := fmt.Sprintf("%x", hasher.Sum(nil))
-		hashes.WriteString(hash + "\n")
-
-		if !writeObjects {
-			continue
+		var hash []byte
+		if writeObjects {
+			hash, err = writeObject(blobBytes)
+			if err != nil {
+				return "", err
+			}
+		} else {
+			hash = hashData(blobBytes)
 		}
 
-		var compressedBytes bytes.Buffer
-		w := zlib.NewWriter(&compressedBytes)
-		w.Write(blobBytes)
-		compressedBytes.Bytes()
-		w.Close()
-
-		directory := fmt.Sprintf(".git/objects/%s", hash[:2])
-		if err := os.MkdirAll(directory, 0755); err != nil {
-			return "", fmt.Errorf("error creating directory: %s", err)
-		}
-		filepath := fmt.Sprintf("%s/%s", directory, hash[2:])
-		if err := os.WriteFile(filepath, compressedBytes.Bytes(), 0644); err != nil {
-			return "", fmt.Errorf("error writing file: %s", err)
-		}
+		hashes.WriteString(fmt.Sprintf("%x\n", hash))
 	}
 
 	return hashes.String(), nil
+}
+
+func WriteTree() (response string, err error) {
+	hash, err := writeTree("./")
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x\n", hash), nil
+}
+
+func hashData(data []byte) (hash []byte) {
+	hasher := sha1.New()
+	hasher.Write(data)
+	return hasher.Sum(nil)
+}
+
+func writeBlob(filepath string) (hash []byte, err error) {
+	fileBytes, err := os.ReadFile(filepath)
+	if err != nil {
+		return nil, err
+	}
+	leadingBytes := []byte(fmt.Sprintf("blob %d%c", len(fileBytes), 0))
+	return writeObject(append(leadingBytes, fileBytes...))
+}
+
+func writeTree(dirpath string) (hash []byte, err error) {
+	dirEntries, err := os.ReadDir(dirpath)
+	if err != nil {
+		return nil, err
+	}
+
+	var treeByteBuffer bytes.Buffer
+	for _, dirEntry := range dirEntries {
+		name := dirEntry.Name()
+		if name == ".git" {
+			continue
+		}
+		var entryHash []byte
+		var mode int
+		if dirEntry.IsDir() {
+			entryHash, err = writeTree(dirpath + "/" + name)
+			mode = 40000
+		} else {
+			entryHash, err = writeBlob(dirpath + "/" + name)
+			mode = 100644
+		}
+		if err != nil {
+			return nil, err
+		}
+		treeByteBuffer.Write(append([]byte(fmt.Sprintf("%d %s%c", mode, name, 0)), entryHash...))
+	}
+	treeBytes := treeByteBuffer.Bytes()
+	leadingBytes := []byte(fmt.Sprintf("tree %d%c", len(treeBytes), 0))
+
+	return writeObject(append(leadingBytes, treeBytes...))
+}
+
+func writeObject(data []byte) (hash []byte, err error) {
+	hash = hashData(data)
+
+	directory := fmt.Sprintf(".git/objects/%x", hash[:1])
+	if err := os.MkdirAll(directory, 0755); err != nil {
+		return nil, fmt.Errorf("error creating directory: %s", err)
+	}
+
+	filepath := fmt.Sprintf("%s/%x", directory, hash[1:])
+	file, err := os.Create(filepath)
+	if err != nil {
+		return nil, fmt.Errorf("error creating file: %s", err)
+	}
+	defer file.Close()
+
+	w := zlib.NewWriter(file)
+	_, err = w.Write(data)
+	if err != nil {
+		return nil, fmt.Errorf("error writing file: %s", err)
+	}
+	w.Close()
+
+	return hash, nil
 }
 
 func readNBytes(n int, reader io.Reader) (data []byte) {
