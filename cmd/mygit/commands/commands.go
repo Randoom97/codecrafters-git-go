@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"compress/zlib"
 	"crypto/sha1"
+	"flag"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func Initialize() (response string, err error) {
@@ -159,6 +161,86 @@ func WriteTree() (response string, err error) {
 		return "", err
 	}
 	return fmt.Sprintf("%x\n", hash), nil
+}
+
+func CommitTree() (response string, err error) {
+	commitTreeCmd := flag.NewFlagSet("commit-tree", flag.ExitOnError)
+	treeHash := os.Args[2]
+	parentPtr := commitTreeCmd.String("p", "", "parent commit")
+	messagePtr := commitTreeCmd.String("m", "", "commit message")
+	commitTreeCmd.Parse(os.Args[3:])
+
+	if *messagePtr == "" {
+		return "", fmt.Errorf("commit message can't be empty")
+	}
+
+	if objectType, err := gitObjectType(treeHash); err != nil {
+		return "", err
+	} else if objectType != "tree" {
+		return "", fmt.Errorf("provided hash isn't a tree")
+	}
+	fullTreeHash, _ := fullHash(treeHash)
+
+	var commitByteBuffer bytes.Buffer
+	commitByteBuffer.WriteString(fmt.Sprintf("tree %s\n", fullTreeHash))
+	if *parentPtr != "" {
+		if objectType, err := gitObjectType(*parentPtr); err != nil {
+			return "", err
+		} else if objectType != "commit" {
+			return "", fmt.Errorf("provided parent isn't a commit")
+		}
+		fullParentHash, _ := fullHash(*parentPtr)
+
+		commitByteBuffer.WriteString(fmt.Sprintf("parent %s\n", fullParentHash))
+	}
+
+	currentTime := fmt.Sprint(time.Now().Unix())
+	timezone, _ := time.Now().Local().Zone()
+	commitByteBuffer.WriteString(fmt.Sprintf("author 123abc <123abc@example.com> %s %s\n", currentTime, timezone))
+	commitByteBuffer.WriteString(fmt.Sprintf("committer 123abc <123abc@example.com> %s %s\n", currentTime, timezone))
+	commitByteBuffer.WriteString("\n")
+	commitByteBuffer.WriteString(fmt.Sprintf("%s\n", *messagePtr))
+
+	commitBytes := commitByteBuffer.Bytes()
+	leadingBytes := []byte(fmt.Sprintf("commit %d%c", len(commitBytes), 0))
+
+	hash, err := writeObject(append(leadingBytes, commitBytes...))
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x\n", hash), nil
+}
+
+func fullHash(hash string) (fullHash string, err error) {
+	if len(hash) < 2 {
+		return "", fmt.Errorf("provided hash isn't long enough")
+	}
+	directory := hash[:2]
+	filename := hash[2:]
+
+	files, err := filepath.Glob(fmt.Sprintf(".git/objects/%s/%s*", directory, filename))
+	if err != nil {
+		return "", err
+	}
+
+	if len(files) < 1 {
+		return "", fmt.Errorf("fatal: Not a valid object name %s", hash)
+	}
+	if len(files) > 1 {
+		return "", fmt.Errorf("provided hash isn't unique enough")
+	}
+
+	parts := strings.Split(files[0], "/")
+	return strings.Join(parts[len(parts)-2:], ""), nil
+}
+
+func gitObjectType(hash string) (objectType string, err error) {
+	reader, err := gitObjectReader(hash)
+	if err != nil {
+		return "", err
+	}
+	defer reader.Close()
+	return strings.Split(readHeader(reader), " ")[0], nil
 }
 
 func hashData(data []byte) (hash []byte) {

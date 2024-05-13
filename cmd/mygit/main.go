@@ -32,6 +32,8 @@ func main() {
 		printCommandOutput(commands.LsTree())
 	case "write-tree":
 		printCommandOutput(commands.WriteTree())
+	case "commit-tree":
+		printCommandOutput(commands.CommitTree())
 	default:
 		utils.Error(fmt.Errorf("unknown command %s", command))
 	}
