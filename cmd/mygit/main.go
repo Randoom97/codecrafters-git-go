@@ -5,12 +5,12 @@ import (
 	"os"
 
 	"github.com/codecrafters-io/git-starter-go/cmd/mygit/commands"
-	"github.com/codecrafters-io/git-starter-go/cmd/mygit/utils"
 )
 
 func printCommandOutput(result string, err error) {
 	if err != nil {
-		utils.Error(err)
+		fmt.Fprintf(os.Stderr, "%s\n", err)
+		os.Exit(1)
 	}
 	fmt.Print(result)
 }
@@ -18,7 +18,8 @@ func printCommandOutput(result string, err error) {
 // Usage: your_git.sh <command> <arg1> <arg2> ...
 func main() {
 	if len(os.Args) < 2 {
-		utils.Error(fmt.Errorf("usage: mygit <command> [<args>...]"))
+		fmt.Fprintf(os.Stderr, "usage: mygit <command> [<args>...]\n")
+		os.Exit(1)
 	}
 
 	switch command := os.Args[1]; command {
@@ -35,6 +36,7 @@ func main() {
 	case "commit-tree":
 		printCommandOutput(commands.CommitTree())
 	default:
-		utils.Error(fmt.Errorf("unknown command %s", command))
+		fmt.Fprintf(os.Stderr, "unknown command %s\n", command)
+		os.Exit(1)
 	}
 }
