@@ -24,7 +24,7 @@ func main() {
 
 	switch command := os.Args[1]; command {
 	case "init":
-		printCommandOutput(commands.Initialize())
+		printCommandOutput(commands.Initialize(true))
 	case "cat-file":
 		printCommandOutput(commands.CatFile())
 	case "hash-object":
@@ -35,6 +35,8 @@ func main() {
 		printCommandOutput(commands.WriteTree())
 	case "commit-tree":
 		printCommandOutput(commands.CommitTree())
+	case "clone":
+		printCommandOutput(commands.Clone())
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %s\n", command)
 		os.Exit(1)

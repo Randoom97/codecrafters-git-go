@@ -4,29 +4,21 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/codecrafters-io/git-starter-go/cmd/mygit/git"
 	"github.com/codecrafters-io/git-starter-go/cmd/mygit/gitobject"
+	"github.com/codecrafters-io/git-starter-go/cmd/mygit/gitpack"
 	"github.com/codecrafters-io/git-starter-go/cmd/mygit/readerutils"
 )
 
-func Initialize() (response string, err error) {
-	for _, dir := range []string{".git", ".git/objects", ".git/refs"} {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return "", fmt.Errorf("error creating directory: %s", err)
-		}
-	}
-
-	headFileContents := []byte("ref: refs/heads/main\n")
-	if err := os.WriteFile(".git/HEAD", headFileContents, 0644); err != nil {
-		return "", fmt.Errorf("error writing file: %s", err)
-	}
-
-	return "Initialized git directory\n", nil
+func Initialize(createMainBranch bool) (response string, err error) {
+	return "Initialized git directory\n", git.Initialize(true)
 }
 
 func CatFile() (response string, err error) {
@@ -46,6 +38,8 @@ func CatFile() (response string, err error) {
 		objectType := parts[0]
 		length, _ := strconv.Atoi(parts[1])
 		switch objectType {
+		case "commit":
+			fallthrough
 		case "blob":
 			return string(readerutils.ReadNBytes(length, reader)), nil
 		case "tree":
@@ -156,7 +150,7 @@ func HashObject() (response string, err error) {
 }
 
 func WriteTree() (response string, err error) {
-	hash, err := gitobject.WriteTree("./")
+	hash, err := gitobject.WriteTreeFromDirectory("./")
 	if err != nil {
 		return "", err
 	}
@@ -201,12 +195,99 @@ func CommitTree() (response string, err error) {
 	commitByteBuffer.WriteString("\n")
 	commitByteBuffer.WriteString(fmt.Sprintf("%s\n", *messagePtr))
 
-	commitBytes := commitByteBuffer.Bytes()
-	leadingBytes := []byte(fmt.Sprintf("commit %d%c", len(commitBytes), 0))
-
-	hash, err := gitobject.WriteObject(append(leadingBytes, commitBytes...))
+	hash, err := gitobject.WriteCommit(commitByteBuffer.Bytes())
 	if err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("%x\n", hash), nil
+}
+
+func Clone() (response string, err error) {
+	if len(os.Args) < 4 {
+		return "", fmt.Errorf("usage: mygit clone <remote url> <directory>")
+	}
+
+	remoteUrl := os.Args[2]
+	if remoteUrl[len(remoteUrl)-1] == '/' {
+		remoteUrl = remoteUrl[:len(remoteUrl)-1]
+	}
+	directory := os.Args[3]
+
+	client := http.Client{Timeout: time.Duration(30) * time.Second}
+	discoveryRequest, err := http.NewRequest("GET", fmt.Sprintf("%s/info/refs?service=git-upload-pack", remoteUrl), nil)
+	if err != nil {
+		return "", err
+	}
+	discoveryResponse, err := client.Do(discoveryRequest)
+	if err != nil {
+		return "", err
+	}
+	if discoveryResponse.StatusCode != 200 {
+		return "", fmt.Errorf("discovery status: %s", discoveryResponse.Status)
+	}
+	defer discoveryResponse.Body.Close()
+
+	// junk lines before ref data
+	data := readerutils.ReadGitPackLine(discoveryResponse.Body)
+	for data != nil {
+		data = readerutils.ReadGitPackLine(discoveryResponse.Body)
+	}
+
+	// first ref has trailing capabilities
+	data = readerutils.ReadGitPackLine(discoveryResponse.Body)
+	refParts := strings.Split(strings.Split(string(data), "\x00")[0], " ")
+	if refParts[1] != "HEAD" {
+		return "", fmt.Errorf("no HEAD ref advertized")
+	}
+	headHash := refParts[0]
+
+	headRef := ""
+	for data := readerutils.ReadGitPackLine(discoveryResponse.Body); data != nil; data = readerutils.ReadGitPackLine(discoveryResponse.Body) {
+		refParts := strings.Split(string(data), " ")
+		if refParts[0] != headHash {
+			continue
+		}
+		headRef = refParts[1]
+		if headRef[len(headRef)-1] == '\n' {
+			headRef = headRef[:len(headRef)-1]
+		}
+	}
+	if headRef == "" {
+		return "", fmt.Errorf("a ref that matches HEAD could not be found")
+	}
+	refName := headRef[strings.LastIndex(headRef, "/")+1:]
+
+	packBody := bytes.NewBuffer([]byte(fmt.Sprintf("0032want %s\n00000009done\n", headHash)))
+	packRequest, err := http.NewRequest("POST", fmt.Sprintf("%s/git-upload-pack?service=git-upload-pack", remoteUrl), packBody)
+	if err != nil {
+		return "", err
+	}
+	packRequest.Header.Add("Content-Type", "application/x-git-upload-pack-request")
+	packResponse, err := client.Do(packRequest)
+	if err != nil {
+		return "", err
+	}
+	if packResponse.StatusCode != 200 {
+		return "", fmt.Errorf("pack status: %s", discoveryResponse.Status)
+	}
+	defer packResponse.Body.Close()
+
+	if err = os.Mkdir(directory, 0755); err != nil {
+		return "", err
+	}
+	os.Chdir(directory)
+	git.Initialize(false)
+
+	readerutils.ReadGitPackLine(packResponse.Body) // NAK
+	if err = gitpack.Unpack(directory, packResponse.Body); err != nil {
+		return "", err
+	}
+	if err = git.MakeBranch(refName, headHash); err != nil {
+		return "", err
+	}
+	if err = git.Checkout(refName); err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("cloned remote %s to %s\n", remoteUrl, directory), nil
 }

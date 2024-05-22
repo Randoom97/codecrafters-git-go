@@ -39,16 +39,20 @@ func HashData(data []byte) (hash []byte) {
 	return hasher.Sum(nil)
 }
 
-func WriteBlob(filepath string) (hash []byte, err error) {
+func WriteBlobFromFile(filepath string) (hash []byte, err error) {
 	fileBytes, err := os.ReadFile(filepath)
 	if err != nil {
 		return nil, err
 	}
-	leadingBytes := []byte(fmt.Sprintf("blob %d%c", len(fileBytes), 0))
-	return WriteObject(append(leadingBytes, fileBytes...))
+	return WriteBlob(fileBytes)
 }
 
-func WriteTree(dirpath string) (hash []byte, err error) {
+func WriteBlob(data []byte) (hash []byte, err error) {
+	leadingBytes := []byte(fmt.Sprintf("blob %d%c", len(data), 0))
+	return WriteObject(append(leadingBytes, data...))
+}
+
+func WriteTreeFromDirectory(dirpath string) (hash []byte, err error) {
 	dirEntries, err := os.ReadDir(dirpath)
 	if err != nil {
 		return nil, err
@@ -63,10 +67,10 @@ func WriteTree(dirpath string) (hash []byte, err error) {
 		var entryHash []byte
 		var mode int
 		if dirEntry.IsDir() {
-			entryHash, err = WriteTree(dirpath + "/" + name)
+			entryHash, err = WriteTreeFromDirectory(dirpath + "/" + name)
 			mode = 40000
 		} else {
-			entryHash, err = WriteBlob(dirpath + "/" + name)
+			entryHash, err = WriteBlobFromFile(dirpath + "/" + name)
 			mode = 100644
 		}
 		if err != nil {
@@ -75,9 +79,17 @@ func WriteTree(dirpath string) (hash []byte, err error) {
 		treeByteBuffer.Write(append([]byte(fmt.Sprintf("%d %s%c", mode, name, 0)), entryHash...))
 	}
 	treeBytes := treeByteBuffer.Bytes()
-	leadingBytes := []byte(fmt.Sprintf("tree %d%c", len(treeBytes), 0))
+	return WriteTree(treeBytes)
+}
 
-	return WriteObject(append(leadingBytes, treeBytes...))
+func WriteTree(data []byte) (hash []byte, err error) {
+	leadingBytes := []byte(fmt.Sprintf("tree %d%c", len(data), 0))
+	return WriteObject(append(leadingBytes, data...))
+}
+
+func WriteCommit(data []byte) (hash []byte, err error) {
+	leadingBytes := []byte(fmt.Sprintf("commit %d%c", len(data), 0))
+	return WriteObject(append(leadingBytes, data...))
 }
 
 func WriteObject(data []byte) (hash []byte, err error) {
